@@ -8,6 +8,7 @@ app = modal.App("g-server-shell")
 # Configure the image with necessary dependencies and mount the code
 image = (
     modal.Image.debian_slim()
+    .apt_install("curl")
     .pip_install("fastapi", "uvicorn")
     .add_local_dir(".", remote_path="/root")
 )
