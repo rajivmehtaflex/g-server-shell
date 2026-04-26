@@ -1,11 +1,16 @@
 import modal
 import os
+import sys
 
 # Define the Modal application
 app = modal.App("g-server-shell")
 
-# Configure the image with necessary dependencies
-image = modal.Image.debian_slim().pip_install("fastapi", "uvicorn")
+# Configure the image with necessary dependencies and mount the code
+image = (
+    modal.Image.debian_slim()
+    .pip_install("fastapi", "uvicorn")
+    .add_local_dir(".", remote_path="/root")
+)
 
 # Define the persistent service
 @app.function(
@@ -16,6 +21,9 @@ image = modal.Image.debian_slim().pip_install("fastapi", "uvicorn")
 )
 @modal.asgi_app()
 def fastapi_app():
+    # Ensure current directory is in path so 'main' can be imported
+    sys.path.append("/root")
     # Import the app instance from main.py
     from main import app as fastapi_instance
     return fastapi_instance
+
