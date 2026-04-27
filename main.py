@@ -1,10 +1,19 @@
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 import os
 import pty
-import subprocess
 import asyncio
+import logging
+import signal
+import json
+import fcntl
+import termios
+import struct
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
@@ -23,39 +32,98 @@ async def terminal_websocket(websocket: WebSocket):
 
     if child_pid == 0:
         # Child process: replace with bash
-        # Set some environment variables for terminal compatibility
         env = os.environ.copy()
         env["TERM"] = "xterm-256color"
         os.execvpe("/bin/bash", ["/bin/bash"], env)
     else:
         # Parent process: handle I/O
         loop = asyncio.get_event_loop()
+        queue = asyncio.Queue()
 
-        def read_from_pty():
+        def on_pty_read():
             try:
-                data = os.read(fd, 1024)
+                # Read from PTY
+                data = os.read(fd, 16384)  # Even larger buffer for high-throughput
                 if data:
-                    asyncio.run_coroutine_threadsafe(
-                        websocket.send_bytes(data), loop
-                    )
+                    queue.put_nowait(data)
+                else:
+                    queue.put_nowait(None)
             except (IOError, OSError):
-                # Handle PTY closed
-                pass
+                loop.remove_reader(fd)
+                queue.put_nowait(None)
 
-        loop.add_reader(fd, read_from_pty)
+        loop.add_reader(fd, on_pty_read)
+
+        async def send_to_websocket():
+            try:
+                while True:
+                    data = await queue.get()
+                    if data is None:
+                        break
+                    
+                    # Coalesce multiple chunks to reduce frame count
+                    chunks = [data]
+                    while not queue.empty():
+                        extra = queue.get_nowait()
+                        if extra is None:
+                            queue.put_nowait(None)
+                            break
+                        chunks.append(extra)
+                    
+                    if chunks:
+                        await websocket.send_bytes(b"".join(chunks))
+                        for _ in range(len(chunks)):
+                            try:
+                                queue.task_done()
+                            except ValueError:
+                                pass
+            except Exception as e:
+                logger.error(f"Error sending to websocket: {e}")
+            finally:
+                logger.info("WebSocket sender task ending")
+
+        sender_task = asyncio.create_task(send_to_websocket())
 
         try:
             while True:
-                data = await websocket.receive_bytes()
-                os.write(fd, data)
-        except Exception:
-            # Connection closed or error
-            pass
+                # Use raw receive to handle both bytes and text
+                message = await websocket.receive()
+                
+                if "bytes" in message:
+                    os.write(fd, message["bytes"])
+                elif "text" in message:
+                    try:
+                        data = json.loads(message["text"])
+                        if data.get("type") == "resize":
+                            rows = data.get("rows", 24)
+                            cols = data.get("cols", 80)
+                            # Set terminal size via ioctl
+                            size = struct.pack("HHHH", rows, cols, 0, 0)
+                            fcntl.ioctl(fd, termios.TIOCSWINSZ, size)
+                            logger.info(f"Resized terminal to {cols}x{rows}")
+                    except Exception as e:
+                        logger.error(f"Error processing text message: {e}")
+                elif message.get("type") == "websocket.disconnect":
+                    break
+        except WebSocketDisconnect:
+            logger.info("WebSocket disconnected")
+        except Exception as e:
+            logger.error(f"Error in websocket loop: {e}")
         finally:
             loop.remove_reader(fd)
-            os.close(fd)
-            # Ensure child process is terminated
+            sender_task.cancel()
+            
             try:
-                os.kill(child_pid, 9)
+                os.close(fd)
             except OSError:
                 pass
+                
+            try:
+                os.kill(child_pid, signal.SIGTERM)
+                await asyncio.sleep(0.1)
+                os.kill(child_pid, signal.SIGKILL)
+                os.waitpid(child_pid, 0)
+            except OSError:
+                pass
+            
+            logger.info(f"Cleaned up process {child_pid}")

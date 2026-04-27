@@ -4,6 +4,7 @@
     <title>Remote Terminal</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
     <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
     <style>
         body, html { margin: 0; padding: 0; height: 100%; background: #000; overflow: hidden; }
         #terminal { width: 100%; height: 100vh; }
@@ -15,22 +16,52 @@
         const term = new Terminal({
             cursorBlink: true,
             fontFamily: 'monospace',
-            theme: { background: '#1e1e1e' }
+            theme: { background: '#1e1e1e' },
+            allowProposedApi: true
         });
+        const fitAddon = new FitAddon.FitAddon();
+        term.loadAddon(fitAddon);
         term.open(document.getElementById('terminal'));
+        fitAddon.fit();
 
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
         socket.binaryType = "arraybuffer";
 
+        socket.onopen = () => {
+            // Send initial size
+            sendResize();
+        };
+
+        function sendResize() {
+            if (socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({
+                    type: 'resize',
+                    cols: term.cols,
+                    rows: term.rows
+                }));
+            }
+        }
+
+        window.addEventListener('resize', () => {
+            fitAddon.fit();
+            sendResize();
+        });
+
         term.onData(data => {
             if (socket.readyState === WebSocket.OPEN) {
+                // Send as binary
                 socket.send(new TextEncoder().encode(data));
             }
         });
 
         socket.onmessage = (event) => {
-            term.write(new Uint8Array(event.data));
+            if (event.data instanceof ArrayBuffer) {
+                term.write(new Uint8Array(event.data));
+            } else {
+                // Handle string messages if any (not used yet)
+                console.log("Received string message:", event.data);
+            }
         };
 
         socket.onclose = () => {
