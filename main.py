@@ -89,9 +89,9 @@ async def terminal_websocket(websocket: WebSocket):
                 # Use raw receive to handle both bytes and text
                 message = await websocket.receive()
                 
-                if "bytes" in message:
+                if message.get("bytes") is not None:
                     os.write(fd, message["bytes"])
-                elif "text" in message:
+                elif message.get("text") is not None:
                     try:
                         data = json.loads(message["text"])
                         if data.get("type") == "resize":
@@ -101,14 +101,19 @@ async def terminal_websocket(websocket: WebSocket):
                             size = struct.pack("HHHH", rows, cols, 0, 0)
                             fcntl.ioctl(fd, termios.TIOCSWINSZ, size)
                             logger.info(f"Resized terminal to {cols}x{rows}")
+                    except json.JSONDecodeError:
+                        logger.warning(f"Received non-JSON text message: {message['text']}")
                     except Exception as e:
                         logger.error(f"Error processing text message: {e}")
                 elif message.get("type") == "websocket.disconnect":
                     break
+                else:
+                    logger.debug(f"Unknown websocket message type: {message.get('type')}")
         except WebSocketDisconnect:
             logger.info("WebSocket disconnected")
         except Exception as e:
             logger.error(f"Error in websocket loop: {e}")
+            logger.debug(f"Failed message: {message}")
         finally:
             loop.remove_reader(fd)
             sender_task.cancel()
