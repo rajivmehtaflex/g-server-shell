@@ -25,7 +25,8 @@ image = (
 def fastapi_app():
     # Ensure current directory is in path so 'main' can be imported
     sys.path.append("/root")
+    # Set the working directory to /root so FileResponse("static/index.html") works
+    os.chdir("/root")
     # Import the app instance from main.py
     from main import app as fastapi_instance
     return fastapi_instance
-
