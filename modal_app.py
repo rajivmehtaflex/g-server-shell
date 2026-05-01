@@ -22,6 +22,7 @@ cpu = float(os.getenv("MODAL_CPU", "2.0"))
 memory = int(os.getenv("MODAL_MEMORY", "4096"))
 gpu_count = int(os.getenv("MODAL_GPU_COUNT", "0"))
 gpu_model = os.getenv("MODAL_GPU_MODEL", "")
+timeout = int(os.getenv("MODAL_TIMEOUT", "10800"))
 
 # Handle GPU configuration
 gpu_config = None
@@ -38,7 +39,7 @@ if gpu_count > 0:
     memory=memory, 
     gpu=gpu_config,
     scaledown_window=300,
-    timeout=10800
+    timeout=timeout
 )
 @modal.asgi_app()
 def fastapi_app():
