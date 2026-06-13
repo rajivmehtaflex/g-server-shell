@@ -12,7 +12,7 @@ import termios
 import struct
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
@@ -43,12 +43,14 @@ async def terminal_websocket(websocket: WebSocket):
         def on_pty_read():
             try:
                 # Read from PTY
-                data = os.read(fd, 16384)  # Even larger buffer for high-throughput
+                data = os.read(fd, 16384)
                 if data:
                     queue.put_nowait(data)
                 else:
                     queue.put_nowait(None)
-            except (IOError, OSError):
+            except OSError as e:
+                if e.errno != 5:  # Ignore EIO (PTY closed)
+                    logger.error(f"PTY read error: {e}")
                 loop.remove_reader(fd)
                 queue.put_nowait(None)
 
@@ -77,6 +79,8 @@ async def terminal_websocket(websocket: WebSocket):
                                 queue.task_done()
                             except ValueError:
                                 pass
+            except WebSocketDisconnect:
+                logger.info("WebSocket disconnected during send")
             except Exception as e:
                 logger.error(f"Error sending to websocket: {e}")
             finally:
